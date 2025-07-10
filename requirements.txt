@@ -1,5 +1,9 @@
-pandas>=2.3.1
-numpy>=2.3.1
+pandas>=2.3.0
+numpy
 scipy>=1.16.0
 scikit-learn>=1.7.0
 matplotlib>=3.10.3
+catboost>=1.2.8
+seaborn>=0.13.2
+shap>=0.48.0
+pytz>=2025.2
