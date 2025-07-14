@@ -9,9 +9,9 @@ import pandas as pd # Install version 1.5.3 (iteritems errors)
 import os
 
 # Read data
-print(os.listdir("./DATA"))
-train = pd.read_csv('./DATA/train.csv')
-test = pd.read_csv('./DATA/test.csv')
+# print(os.listdir("./DATA"))
+train = pd.read_csv('../../data/train.csv')
+test = pd.read_csv('../../data/test.csv')
 
 # Warning "A value is trying to be set on a copy of a slice from a DataFrame.
 # Try using .loc[row_indexer,col_indexer] = value instead" removing:
@@ -391,10 +391,10 @@ catboost_cv_test = test[['ID']]
 catboost_cv_test['catboost_pred'] = Catboost_test['test_yhat']
 
 # Outputs to .csv
-catboost_submission.to_csv("BBDD Output/catboost_submission.csv", index=False)
-catboost_cv_train.to_csv("BBDD Output/catboost_cv_train.csv", index=False)
-catboost_cv_test.to_csv("BBDD Output/catboost_cv_test.csv", index=False)
-Importance.to_csv("BBDD Output/catboost_importance.csv", index=False)
+catboost_submission.to_csv("../../results/catboost_submission.csv", index=False)
+catboost_cv_train.to_csv("../../results/catboost_cv_train.csv", index=False)
+catboost_cv_test.to_csv("../../results/catboost_cv_test.csv", index=False)
+Importance.to_csv("../../results/catboost_importance.csv", index=False)
 
 # If we want to save/load an "expensive" to compute
 ################################################################################
