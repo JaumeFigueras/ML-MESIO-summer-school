@@ -140,7 +140,7 @@ class CatboostKFold(Catboost):
 
     def train_predict(self, number_of_folds: int, random_seed: int,  make_prediction: bool, x: pd.DataFrame, y: pd.DataFrame, x_test: pd.DataFrame, run_params: Dict[str, Any]) -> Any:
         # Create the k folds
-        kf = StratifiedKFold(n_splits=number_of_folds, shuffle=True, random_state=self.random_seed)
+        kf = StratifiedKFold(n_splits=number_of_folds, shuffle=True, random_state=4567)
         train_df_level_1 = pd.DataFrame(np.zeros((x.shape[0], 1)), columns=['train_y_hat'])
         test_df_level_1 = pd.DataFrame()
         self.model_catboost.set_params(**run_params)
@@ -247,15 +247,18 @@ if __name__ == "__main__":
                                                    })
         result = method.predict(x_test)
     elif args.method == 'catboost-kfold':
+        remove = ['X3', 'X1', 'X41', 'X55', 'X64', 'X20', 'X15', 'X19', 'X12', 'X57', 'X31', 'X5', 'X59', 'X47', 'X37',
+                  'X4', 'X54', 'X62', 'X45', 'X28', 'X42', 'X30', 'X32', 'X33', 'X16'
+                  ]
         method = Catboost(logger, model_params={'eval_metric': 'AUC',
                                                 'iterations': 5000,
                                                 'od_type': 'Iter',
-                                                'random_seed': RANDOM_SEED,
+                                                'random_seed': 4567,
                                                 'verbose': 50})
         train_df, test_df = method.process_data(train_df, test_df)
-        x_train = train_df.drop(columns=['ID', 'TARGET', 'X24', 'X56', 'X39']).reset_index(drop=True)
+        x_train = train_df.drop(columns=['ID', 'TARGET']+remove).reset_index(drop=True)
         y_train = train_df['TARGET'].reset_index(drop=True)
-        x_test = test_df.drop(columns=['X24', 'X56', 'X39']).reset_index(drop=True)
+        x_test = test_df.drop(columns=remove).reset_index(drop=True)
         method.train(x_train, y_train, run_params={'objective': 'Logloss',
                                                    'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
                                                    'depth': 6,  # Depth of the trees (values betwwen 5 and 10, higher -> more overfitting)
@@ -263,7 +266,7 @@ if __name__ == "__main__":
                                                    'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
                                                    'rsm': 0.5, # % of features to consider in each split (lower -> faster and reduces overfitting)
                                                    'subsample': 0.5,  # Sample rate for bagging
-                                                   'random_seed': RANDOM_SEED
+                                                   'random_seed': 4567
                                                    })
         number_of_rounds = round(method.model_catboost.best_iteration_ / (1 - TEST_TRAIN_RATIO) * (1 - 1 / NUMBER_OF_FOLDS))
         iterations = [round(number_of_rounds * f) for f in [0.9,1,1.1]]
@@ -272,9 +275,9 @@ if __name__ == "__main__":
             logger.info(f'Iteration {i}')
             method = CatboostKFold(logger, model_params={'eval_metric': 'AUC',
                                                          'od_type': 'Iter',
-                                                         'random_seed': 2305,
+                                                         'random_seed': 4567,
                                                          'n_estimators': i,
-                                                         'verbose': False,}, random_seed=2305)
+                                                         'verbose': False,}, random_seed=4567)
             Pred_train, Pred_test, score = method.train_predict(number_of_folds=NUMBER_OF_FOLDS,
                                                                 random_seed=2305,
                                                                 make_prediction=True, x=x_train, y=y_train,
@@ -286,7 +289,7 @@ if __name__ == "__main__":
                                                                    'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
                                                                    'rsm': 0.5, # % of features to consider in each split (lower -> faster and reduces overfitting)
                                                                    'subsample': 0.5,  # Sample rate for bagging
-                                                                   'random_seed': 2305
+                                                                   'random_seed': 4567
                                                                 })
             # Look if we are in the first test:
             if len(scores) == 0:
@@ -318,11 +321,11 @@ if __name__ == "__main__":
 
         # Define the optimal model
         method = Catboost(logger, model_params={'n_estimators': i,
-                                                'random_seed': 1234,
+                                                'random_seed': 4567,
                                                 'verbose': 100})
-        x_train = train_df.drop(columns=['ID', 'TARGET', 'X24', 'X56', 'X39']).reset_index(drop=True)
+        x_train = train_df.drop(columns=['ID', 'TARGET']+remove).reset_index(drop=True)
         y_train = train_df['TARGET'].reset_index(drop=True)
-        x_test = test_df.drop(columns=['X24', 'X56', 'X39']).reset_index(drop=True)
+        x_test = test_df.drop(columns=remove).reset_index(drop=True)
         method.train(x_train, y_train, run_params={'objective': 'Logloss',
                                                    'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
                                                    'depth': 4,  # Depth of the trees (values betwwen 5 and 10, higher -> more overfitting)
@@ -330,9 +333,9 @@ if __name__ == "__main__":
                                                    'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
                                                    'rsm': 0.5, # % of features to consider in each split (lower -> faster and reduces overfitting)
                                                    'subsample': 0.5,  # Sample rate for bagging
-                                                   'random_seed': 1234
+                                                   'random_seed': 4567
                                                    })
-        result = method.predict(train_df.drop(columns=['TARGET', 'X24', 'X56', 'X39']).reset_index(drop=True))
+        result = method.predict(train_df.drop(columns=['TARGET']+remove).reset_index(drop=True))
         cm = confusion_matrix(y_train, result['Pred'] > 0.5)
         print(cm)
         result = method.predict(x_test)
