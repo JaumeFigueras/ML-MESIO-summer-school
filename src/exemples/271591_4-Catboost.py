@@ -10,8 +10,8 @@ import os
 
 # Read data
 # print(os.listdir("./DATA"))
-train = pd.read_csv('../../data/train.csv')
-test = pd.read_csv('../../data/test.csv')
+train = pd.read_csv('./data/train.csv')
+test = pd.read_csv('./data/test.csv')
 
 # Warning "A value is trying to be set on a copy of a slice from a DataFrame.
 # Try using .loc[row_indexer,col_indexer] = value instead" removing:
