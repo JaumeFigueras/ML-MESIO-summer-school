@@ -68,7 +68,7 @@ def fill_missing_categorical(dfs: Union[Iterable[pd.DataFrame], pd.DataFrame], f
 if __name__ == "__main__":
     """ Main program to run the different ML approaches
     Should be called like:
-    python -m src.solucions.exercise.py --train-file ./data/train.csv --test-file ./data/test.csv --result-file ./results/random.csv --method random
+    python -m src.solucions.exercise --train-file ./data/train.csv --test-file ./data/test.csv --result-file ./results/random.csv --method random
     """
     # Config the program arguments
     # noinspection DuplicatedCode
@@ -161,8 +161,8 @@ if __name__ == "__main__":
         root_train_df = train_df.drop(columns=less_significant).copy()
         root_test_df = test_df.drop(columns=less_significant).copy()
         # OTHER
-        DEPTH = 10
-        MIN_DATA_LEAF = 100
+        DEPTH = 4
+        MIN_DATA_LEAF = 150
         # Basic CatBoost run to determine the number of iterations that was used to learn
         # Constant definition for the basic CatBoost
         THRESHOLD_MISSING: int = 20
