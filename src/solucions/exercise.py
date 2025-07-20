@@ -156,16 +156,17 @@ if __name__ == "__main__":
         method.train(x_train, y_train, run_params=run_parameters, other_params=other_parameters)
         result = method.predict(x_test, 'ID', 'Pred')
     elif args.method == 'catboost-cv':
-        # less_significant: List[str] = ['X12', 'X41', 'X5', 'X15', 'X19', 'X1', 'X59', 'X57', 'X47', 'X31', 'X37']
-        less_significant: List[str] = []
+        less_significant: List[str] = [ 'X59', 'X57', 'X47', 'X31', 'X37']
+        # less_significant: List[str] = []
         root_train_df = train_df.drop(columns=less_significant).copy()
         root_test_df = test_df.drop(columns=less_significant).copy()
         # OTHER
-        DEPTH = 4
-        MIN_DATA_LEAF = 150
+        DEPTH = 7
+        MIN_DATA_LEAF = 200
+        THRESHOLD_VALUES = 20
         # Basic CatBoost run to determine the number of iterations that was used to learn
         # Constant definition for the basic CatBoost
-        THRESHOLD_MISSING: int = 20
+        THRESHOLD_MISSING: int = THRESHOLD_VALUES
         THRESHOLD_CORRELATION: float = 0.99
         TEST_TRAIN_RATIO: float = 0.3
         RANDOM_SEED: int = 1234
@@ -225,8 +226,8 @@ if __name__ == "__main__":
         RANDOM_SEED: int = 2305
         EARLY_STOPPING_ROUNDS: int = 100
         NUMBER_OF_FOLDS: int = 5
-        ITERATIONS_MULTIPLIER_LIST: List[float] = [0.9, 1, 1.1]
-        # ITERATIONS_MULTIPLIER_LIST: List[float] = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3]
+        # ITERATIONS_MULTIPLIER_LIST: List[float] = [0.9, 1, 1.1]
+        ITERATIONS_MULTIPLIER_LIST: List[float] = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3]
         # Parameters of the CatBoost model
         model_parameters = {'eval_metric': 'AUC',
                             'od_type': 'Iter',
