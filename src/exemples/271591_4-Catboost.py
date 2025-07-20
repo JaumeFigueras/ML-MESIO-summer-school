@@ -70,10 +70,10 @@ for col in Categorical:
 # A3055
 # A4665
 train = train[train['ID'] != 'A1039']
-train = train[train['ID'] != 'A2983']
+# train = train[train['ID'] != 'A2983']
 train = train[train['ID'] != 'A3055']
 train = train[train['ID'] != 'A4665']
-
+train = train[train['ID'] != 'A5500']
 train.reset_index(drop=True, inplace=True)
 
 # 2) Correlations
@@ -153,6 +153,7 @@ x_tr, x_val, y_tr, y_val = train_test_split(X_train, Y_train, test_size=TS, rand
 # Categorical positions for catboost
 Pos = list()
 As_Categorical = Categorical.tolist()
+print(As_Categorical)
 As_Categorical.remove('ID')
 for col in As_Categorical:
     Pos.append((X_train.columns.get_loc(col)))
@@ -391,10 +392,10 @@ catboost_cv_test = test[['ID']]
 catboost_cv_test['catboost_pred'] = Catboost_test['test_yhat']
 
 # Outputs to .csv
-catboost_submission.to_csv("../../results/catboost_submission.csv", index=False)
-catboost_cv_train.to_csv("../../results/catboost_cv_train.csv", index=False)
-catboost_cv_test.to_csv("../../results/catboost_cv_test.csv", index=False)
-Importance.to_csv("../../results/catboost_importance.csv", index=False)
+catboost_submission.to_csv("catboost_submission.csv", index=False)
+catboost_cv_train.to_csv("catboost_cv_train.csv", index=False)
+catboost_cv_test.to_csv("catboost_cv_test.csv", index=False)
+Importance.to_csv("catboost_importance.csv", index=False)
 
 # If we want to save/load an "expensive" to compute
 ################################################################################

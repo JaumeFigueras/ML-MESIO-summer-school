@@ -6,194 +6,69 @@ import logging
 import pandas as pd
 import numpy as np
 
-from abc import ABC
-from abc import abstractmethod
 from logging.handlers import RotatingFileHandler
-from logging import Logger
-from sklearn.model_selection import train_test_split
-from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import confusion_matrix
-from sklearn.metrics import roc_auc_score
-from catboost import CatBoostClassifier
-from catboost import Pool
+
+from src.methods.random import Random
+from src.methods.catboost_basic import CatboostBasic
+from src.methods.catboost_cross_validation import CatboostCrossValidation
 
 from typing import Optional
 from typing import Dict
 from typing import Any
 from typing import List
 from typing import Iterable
-from typing import Tuple
+from typing import Union
 
-THRESHOLD_MISSING: int = 20
-THRESHOLD_CORRELATION: float = 0.99
-TEST_TRAIN_RATIO: float = 0.3
-RANDOM_SEED: int = 1234
-EARLY_STOPPING_ROUNDS: int = 100
-NUMBER_OF_FOLDS: int = 5
 
-def pre_process_data(dfs: Iterable[pd.DataFrame]) -> List[pd.DataFrame]:
-    global THRESHOLD_MISSING
+def remove_missing_values(dfs: Union[Iterable[pd.DataFrame], pd.DataFrame], threshold: int) -> Union[List[pd.DataFrame], pd.DataFrame]:
+    """
+    Removes the dataframe rows with more than threshold missing values
+
+    :param dfs: List of data frames or dataframe to be processed
+    :type dfs: Iterable[pd.DataFrame] or pd.DataFrame
+    :param threshold: Number of missing values to consider when removing the row
+    :type threshold: int
+    :return: List of processed data frames
+    :rtype: Iterable[pd.DataFrame] or pd.DataFrame
+    """
 
     outputs: List[pd.DataFrame] = list()
-    for i, df in enumerate(dfs):
-        # Fill NaN in categorical columns with 'NA'
-        cat_cols = df.select_dtypes(include=['object', 'category']).columns
-        df[cat_cols] = df[cat_cols].fillna('NA')
-        # Remove rows with more than THRESHOLD_MISSING
-        if i == 0:
-            df = df[df.isna().sum(axis=1) < THRESHOLD_MISSING]
+    dfs_to_process = dfs if isinstance(dfs, list) else [dfs]
+    for df in dfs_to_process:
+        # Remove rows with more than threshold missing values
+        ids_with_many_nans = df.loc[df.isna().sum(axis=1) >= threshold, 'ID']
+        df = df[df.isna().sum(axis=1) < threshold].copy()
         # Reindex
         df.reset_index(drop=True, inplace=True)
         # Add the data frame to a processed list
         outputs.append(df)
-    return outputs
+    return outputs if len(outputs) > 1 else outputs[0]
 
+def fill_missing_categorical(dfs: Union[Iterable[pd.DataFrame], pd.DataFrame], fill_value: str) -> Union[List[pd.DataFrame], pd.DataFrame]:
+    """
+    Fill missing categorical columns with a fill value
 
-class Method(ABC):
-
-    def __init__(self, l: Logger, params: Optional[Dict[str, Any]] = None) -> None:
-        self.params = params if params is not None else dict()
-        self.logger = l
-
-    @abstractmethod
-    def train(self, x: pd.DataFrame, y:pd.DataFrame) -> None:
-        pass
-
-    @staticmethod
-    def predict(x: pd.DataFrame) -> pd.DataFrame:
-        y = x[['ID']].copy()
-        y['Pred'] = 0
-        return y
-
-    def analyse_correlation(self, df: pd.DataFrame, correlation_threshold: float) -> List[str]:
-        # get the Pearson correlation matrix
-        numerical_df = df.select_dtypes(exclude=['object', 'category'])
-        correlation_matrix = numerical_df.corr().abs()  # Correlation Matrix
-        # Extract the upper triangular excluding the diagonal and marking True to the elements that we like to analyse and
-        # NaN to those wee don't like to analyse. Where is equivalent to a & mask
-        upper_matrix = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
-        correlated_columns: List[str] = [col for col in upper_matrix.columns if
-                                         any(upper_matrix[col] > correlation_threshold)]
-        self.logger.info(f"Correlated columns: {', '.join(correlated_columns) if len(correlated_columns) else 'None'}")
-        return correlated_columns
-
-    def analyse_constant(self, df: pd.DataFrame) -> List[str]:
-        constant_columns =  [col for col in df.columns if df[col].nunique() < 2]
-        self.logger.info(f"Constant columns: {', '.join(constant_columns) if len(constant_columns) > 0 else 'None'}")
-        return constant_columns
-
-class Random(Method):
-    def __init__(self, l: Logger, params: Optional[Dict[str, Any]] = None) -> None:
-        super().__init__(l, params)
-
-    def train(self, x: pd.DataFrame, y: pd.DataFrame) -> None:
-        self.logger.info("Random training started")
-        self.logger.info(f"Random training parameters: {self.params}")
-        self.logger.info("Random training ended")
-
-    def predict(self, x: pd.DataFrame) -> pd.DataFrame:
-        self.logger.info("Random prediction started")
-        y = super().predict(x)
-        y['Pred'] = np.random.rand(len(y))
-        self.logger.info("Random prediction ended")
-        return y
-
-class Catboost(Method):
-    def __init__(self, l: Logger, model_params: Optional[Dict[str, Any]] = None, random_seed: Optional[int] = None) -> None:
-        super().__init__(l, model_params)
-        self.model_catboost = CatBoostClassifier(**self.params)
-        self.random_seed = random_seed
-
-    def process_data(self, train: pd.DataFrame, test: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        self.logger.info("Processing data")
-        self.logger.info(f"Processing Correlation")
-        correlated_columns = self.analyse_correlation(train, THRESHOLD_CORRELATION)
-        processed_train = train.drop(columns=correlated_columns)
-        processed_test = test.drop(columns=correlated_columns)
-        self.logger.info(f"Processing Constant columns")
-        constant_columns = self.analyse_constant(processed_train)
-        processed_train.drop(columns=constant_columns, inplace=True)
-        processed_test.drop(columns=constant_columns, inplace=True)
-        return processed_train, processed_test
-
-    def train(self, x: pd.DataFrame, y: pd.DataFrame, run_params: Optional[Dict[str, Any]] = None) -> None:
-        self.logger.info("Catboost training started")
-        self.logger.info(f"Catboost training parameters: {self.params}")
-        categorical: List[str] = list(x.select_dtypes(include=['object', 'category']).columns)
-        x_to_train, x_to_validate, y_to_train, y_to_validate = train_test_split(x, y, test_size=TEST_TRAIN_RATIO, random_state=RANDOM_SEED)
-        pool_tr = Pool(x_to_train, y_to_train, cat_features=categorical)
-        pool_val = Pool(x_to_validate, y_to_validate, cat_features=categorical)
-        self.model_catboost.set_params(**run_params)
-        self.model_catboost.fit(X=pool_tr, eval_set=pool_val, early_stopping_rounds=EARLY_STOPPING_ROUNDS)
-        self.logger.info("Catboost training ended")
-
-    def predict(self, x: pd.DataFrame) -> pd.DataFrame:
-        self.logger.info("Catboost prediction started")
-        y = super().predict(x)
-        y['Pred'] = self.model_catboost.predict_proba(x.drop(columns=['ID']))[:, 1]
-        self.logger.info("Catboost prediction ended")
-        return y
-
-class CatboostKFold(Catboost):
-    def __init__(self, l: Logger, model_params: Optional[Dict[str, Any]] = None, random_seed: Optional[int] = None) -> None:
-        super().__init__(l, model_params, random_seed)
-
-    def train_predict(self, number_of_folds: int, random_seed: int,  make_prediction: bool, x: pd.DataFrame, y: pd.DataFrame, x_test: pd.DataFrame, run_params: Dict[str, Any]) -> Any:
-        # Create the k folds
-        kf = StratifiedKFold(n_splits=number_of_folds, shuffle=True, random_state=4567)
-        train_df_level_1 = pd.DataFrame(np.zeros((x.shape[0], 1)), columns=['train_y_hat'])
-        test_df_level_1 = pd.DataFrame()
-        self.model_catboost.set_params(**run_params)
-        for i, (train_index, test_index) in enumerate(kf.split(x, y)):
-            fold_x_train = x.loc[train_index.tolist(), :]
-            fold_x_test = x.loc[test_index.tolist(), :]
-            fold_y_train = y[train_index.tolist()]
-            fold_y_test = y[test_index.tolist()]
-            categorical: List[str] = list(x.select_dtypes(include=['object', 'category']).columns)
-            if len(categorical) > 0:
-                # Prepare Pool
-                pool_train = Pool(fold_x_train, fold_y_train, cat_features=categorical)
-                # (k-1)-folds model adjusting
-
-                self.model_catboost.fit(X=pool_train)
-            else:
-                # (k-1)-folds model adjusting
-
-                self.model_catboost.fit(fold_x_train, fold_y_train)
-            # Predict on the free fold to evaluate metric
-            # and on train to have an overfitting-free prediction for the next level
-            p_fold = self.model_catboost.predict_proba(fold_x_test)[:, 1]
-            p_fold_train = self.model_catboost.predict_proba(fold_x_train)[:, 1]
-            score = roc_auc_score(fold_y_test, p_fold)
-            score_train = roc_auc_score(fold_y_train, p_fold_train)
-            self.logger.info(f"Number of splits: {number_of_folds}; Fold: {i}; Test AUC: {round(score, 4)}; Train AUC: {round(score_train, 4)}")
-            # Save in Level_1_train the "free" predictions concatenated
-            train_df_level_1.loc[test_index.tolist(), 'train_y_hat'] = p_fold
-            # Predict in test to make the k model mean
-            # Define name of the prediction (p_"iteration number")
-            if make_prediction:
-                name = 'p_' + str(i)
-                # Prediction to real test
-                real_pred = self.model_catboost.predict_proba(x_test)[:, 1]
-                # Name
-                real_pred = pd.DataFrame({name: real_pred}, columns=[name])
-                # Add to Level_1_test
-                test_df_level_1 = pd.concat((test_df_level_1, real_pred), axis=1)
-        # Compute the metric of the total concatenated prediction (and free of overfitting) in train
-        score_total = roc_auc_score(y, train_df_level_1['train_y_hat'])
-        self.logger.info(f"Number of splits: {number_of_folds}; Total AUC: {round((score_total) * 100, 4)} %")
-        if make_prediction:
-            test_df_level_1['model'] = test_df_level_1.mean(axis=1)
-        # Return train and test sets with predictions and the performance
-        if make_prediction:
-            return train_df_level_1, pd.DataFrame({'test_y_hat': test_df_level_1['model']}), score_total
-        else:
-            return score_total
+    :param dfs: List of data frames or dataframe to be processed
+    :type dfs: Iterable[pd.DataFrame] or pd.DataFrame
+    :param fill_value: Value to fill missing values with
+    :type fill_value: str
+    :return: List of processed data frames
+    :rtype: Iterable[pd.DataFrame] or pd.DataFrame
+    """
+    outputs: List[pd.DataFrame] = list()
+    dfs_to_process = dfs if isinstance(dfs, Iterable) else [dfs]
+    for df in dfs_to_process:
+        # Fill NaN in categorical columns with 'NA'
+        cat_cols = df.select_dtypes(include=['object', 'category']).columns
+        df[cat_cols] = df[cat_cols].copy().fillna('NA')
+        outputs.append(df)
+    return outputs if len(outputs) > 1 else outputs[0]
 
 if __name__ == "__main__":
     """ Main program to run the different ML approaches
     Should be called like:
-    python ./src/solucions/exercise.py --train-file ./data/train.csv --test-file ./data/test.csv --result-file ./results/random.csv --method random
+    python -m src.solucions.exercise.py --train-file ./data/train.csv --test-file ./data/test.csv --result-file ./results/random.csv --method random
     """
     # Config the program arguments
     # noinspection DuplicatedCode
@@ -201,7 +76,7 @@ if __name__ == "__main__":
     parser.add_argument('-t', '--train-file', type=str, help='Train CSV file', required=True)
     parser.add_argument('-s', '--test-file', type=str, help='Test CSV file', required=True)
     parser.add_argument('-r', '--result-file', type=str, help='Result CSV file to write', required=True)
-    parser.add_argument('-m', '--method', type=str, help='Learning method to use', required=True, choices=['random','catboost', 'catboost-kfold'])
+    parser.add_argument('-m', '--method', type=str, help='Learning method to use', required=True, choices=['random','catboost', 'catboost-cv', 'prof'])
     parser.add_argument('-l', '--log-file', type=str, help='File to log progress and errors', required=False)
     args = parser.parse_args()
 
@@ -219,78 +94,184 @@ if __name__ == "__main__":
     logger.info("Loading test set")
     test_df = pd.read_csv(args.test_file)
 
-    train_df, test_df = pre_process_data((train_df, test_df))
-
     result: pd.DataFrame = pd.DataFrame()
     if args.method == 'random':
+        # Constant definition for the basic CatBoost
+        THRESHOLD_MISSING: int = 20
+        # Pre process data
+        train_df, test_df = remove_missing_values((train_df, test_df), THRESHOLD_MISSING)
+        train_df, test_df = fill_missing_categorical((train_df, test_df), 'NA')
+        # Fill a result with random values
         method = Random(logger)
-        method.train(train_df, None)
-        result = method.predict(test_df)
+        method.train(train_df, pd.DataFrame())
+        result = method.predict(test_df, 'ID', 'Pred')
     if args.method == 'catboost':
-        method = Catboost(logger, model_params={'eval_metric': 'AUC',
-                                                'iterations': 5000,
-                                                'od_type': 'Iter',
-                                                'random_seed': RANDOM_SEED,
-                                                'verbose': 50})
-        train_df, test_df = method.process_data(train_df, test_df)
+        # Constant definition for the basic CatBoost
+        THRESHOLD_MISSING: int = 20
+        THRESHOLD_CORRELATION: float = 0.99
+        TEST_TRAIN_RATIO: float = 0.3
+        RANDOM_SEED: int = 1234
+        EARLY_STOPPING_ROUNDS: int = 100
+        # Parameters of the CatBoost model
+        model_parameters = {'eval_metric': 'AUC',
+                            'iterations': 5000,
+                            'od_type': 'Iter',
+                            'random_seed': RANDOM_SEED,
+                            'verbose': 50
+                            }
+        run_parameters = {'objective': 'Logloss',
+                          'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
+                          'depth': 4,  # Depth of the trees (values between 5 and 10, higher -> more overfitting)
+                          'min_data_in_leaf': 150,
+                          'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
+                          'rsm': 0.5,  # % of features to consider in each split (lower -> faster and reduces overfitting)
+                          'subsample': 0.5,  # Sample rate for bagging
+                          'random_seed': RANDOM_SEED
+                          }
+        other_parameters = {'early_stopping_rounds': EARLY_STOPPING_ROUNDS,
+                            'random_seed': RANDOM_SEED,
+                            'test_train_ratio': TEST_TRAIN_RATIO
+                           }
+        # Pre process data
+        train_df = remove_missing_values(train_df, THRESHOLD_MISSING)
+        train_df, test_df = fill_missing_categorical((train_df, test_df), 'NA')
+        # CatBoost Basic
+        method = CatboostBasic(logger, model_params=model_parameters)
+        # Process data
+        logger.info("Processing data")
+        logger.info(f"Processing Correlation")
+        correlated_columns = method.analyse_correlation(train_df, THRESHOLD_CORRELATION)
+        if correlated_columns is not None and len(correlated_columns) > 0:
+            train_df = train_df.drop(columns=correlated_columns)
+            test_df = test_df.drop(columns=correlated_columns)
+        logger.info(f"Processing Constant columns")
+        constant_columns = method.analyse_constant(train_df)
+        if constant_columns is not None and len(constant_columns) > 0:
+            train_df = train_df.drop(columns=constant_columns)
+            test_df = test_df.drop(columns=constant_columns)
         x_train = train_df.drop(columns=['ID', 'TARGET']).reset_index(drop=True)
         y_train = train_df['TARGET'].reset_index(drop=True)
         x_test = test_df.reset_index(drop=True)
-        method.train(x_train, y_train, run_params={'objective': 'Logloss',
-                                                   'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
-                                                   'depth': 4,  # Depth of the trees (values betwwen 5 and 10, higher -> more overfitting)
-                                                   'min_data_in_leaf': 150,
-                                                   'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
-                                                   'rsm': 0.5, # % of features to consider in each split (lower -> faster and reduces overfitting)
-                                                   'subsample': 0.5,  # Sample rate for bagging
-                                                   'random_seed': RANDOM_SEED
-                                                   })
-        result = method.predict(x_test)
-    elif args.method == 'catboost-kfold':
-        remove = ['X3', 'X1', 'X41', 'X55', 'X64', 'X20', 'X15', 'X19', 'X12', 'X57', 'X31', 'X5', 'X59', 'X47', 'X37',
-                  'X4', 'X54', 'X62', 'X45', 'X28', 'X42', 'X30', 'X32', 'X33', 'X16'
-                  ]
-        method = Catboost(logger, model_params={'eval_metric': 'AUC',
-                                                'iterations': 5000,
-                                                'od_type': 'Iter',
-                                                'random_seed': 4567,
-                                                'verbose': 50})
-        train_df, test_df = method.process_data(train_df, test_df)
-        x_train = train_df.drop(columns=['ID', 'TARGET']+remove).reset_index(drop=True)
+        # Train and predict
+        method.train(x_train, y_train, run_params=run_parameters, other_params=other_parameters)
+        result = method.predict(x_test, 'ID', 'Pred')
+    elif args.method == 'catboost-cv':
+        # less_significant: List[str] = ['X12', 'X41', 'X5', 'X15', 'X19', 'X1', 'X59', 'X57', 'X47', 'X31', 'X37']
+        less_significant: List[str] = []
+        root_train_df = train_df.drop(columns=less_significant).copy()
+        root_test_df = test_df.drop(columns=less_significant).copy()
+        # OTHER
+        DEPTH = 10
+        MIN_DATA_LEAF = 100
+        # Basic CatBoost run to determine the number of iterations that was used to learn
+        # Constant definition for the basic CatBoost
+        THRESHOLD_MISSING: int = 20
+        THRESHOLD_CORRELATION: float = 0.99
+        TEST_TRAIN_RATIO: float = 0.3
+        RANDOM_SEED: int = 1234
+        EARLY_STOPPING_ROUNDS: int = 100
+        # Parameters of the CatBoost model
+        model_parameters = {'eval_metric': 'AUC',
+                            'iterations': 5000,
+                            'od_type': 'Iter',
+                            'random_seed': RANDOM_SEED,
+                            'verbose': 50
+                            }
+        run_parameters = {'objective': 'Logloss',
+                          'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
+                          'depth': DEPTH,  # Depth of the trees (values between 5 and 10, higher -> more overfitting)
+                          'min_data_in_leaf': MIN_DATA_LEAF,
+                          'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
+                          'rsm': 0.5,  # % of features to consider in each split (lower -> faster and reduces overfitting)
+                          'subsample': 0.5,  # Sample rate for bagging
+                          'random_seed': RANDOM_SEED
+                          }
+        other_parameters = {'early_stopping_rounds': EARLY_STOPPING_ROUNDS,
+                            'random_seed': RANDOM_SEED,
+                            'test_train_ratio': TEST_TRAIN_RATIO
+                           }
+        # Pre process data
+        train_df = root_train_df.copy()
+        test_df = root_test_df.copy()
+        train_df = remove_missing_values(train_df, THRESHOLD_MISSING)
+        train_df, test_df = fill_missing_categorical((train_df, test_df), 'NA')
+        # CatBoost Basic
+        method = CatboostBasic(logger, model_params=model_parameters)
+        # Process data
+        logger.info("Processing data")
+        logger.info(f"Processing Correlation")
+        correlated_columns = method.analyse_correlation(train_df, THRESHOLD_CORRELATION)
+        if correlated_columns is not None and len(correlated_columns) > 0:
+            train_df = train_df.drop(columns=correlated_columns)
+            test_df = test_df.drop(columns=correlated_columns)
+        logger.info(f"Processing Constant columns")
+        constant_columns = method.analyse_constant(train_df)
+        if constant_columns is not None and len(constant_columns) > 0:
+            train_df = train_df.drop(columns=constant_columns)
+            test_df = test_df.drop(columns=constant_columns)
+        x_train = train_df.drop(columns=['ID', 'TARGET']).reset_index(drop=True)
         y_train = train_df['TARGET'].reset_index(drop=True)
-        x_test = test_df.drop(columns=remove).reset_index(drop=True)
-        method.train(x_train, y_train, run_params={'objective': 'Logloss',
-                                                   'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
-                                                   'depth': 6,  # Depth of the trees (values betwwen 5 and 10, higher -> more overfitting)
-                                                   'min_data_in_leaf': 150,
-                                                   'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
-                                                   'rsm': 0.5, # % of features to consider in each split (lower -> faster and reduces overfitting)
-                                                   'subsample': 0.5,  # Sample rate for bagging
-                                                   'random_seed': 4567
-                                                   })
-        number_of_rounds = round(method.model_catboost.best_iteration_ / (1 - TEST_TRAIN_RATIO) * (1 - 1 / NUMBER_OF_FOLDS))
-        iterations = [round(number_of_rounds * f) for f in [0.9,1,1.1]]
+        x_test = test_df.reset_index(drop=True)
+        # Train and predict
+        method.train(x_train, y_train, run_params=run_parameters, other_params=other_parameters)
+        # Cross validation CatBoost
+        # First restore the original data
+        train_df = root_train_df.copy()
+        test_df = root_test_df.copy()
+        # Constant definition for the basic CatBoost
+        THRESHOLD_MISSING: int = 20
+        THRESHOLD_CORRELATION: float = 0.99
+        TEST_TRAIN_RATIO: float = 0.3
+        RANDOM_SEED: int = 2305
+        EARLY_STOPPING_ROUNDS: int = 100
+        NUMBER_OF_FOLDS: int = 5
+        ITERATIONS_MULTIPLIER_LIST: List[float] = [0.9, 1, 1.1]
+        # ITERATIONS_MULTIPLIER_LIST: List[float] = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.3]
+        # Parameters of the CatBoost model
+        model_parameters = {'eval_metric': 'AUC',
+                            'od_type': 'Iter',
+                            'random_seed': RANDOM_SEED,
+                            'verbose': False
+                            }
+        run_parameters = {'objective': 'Logloss',
+                          'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
+                          'depth': DEPTH,  # Depth of the trees (values between 5 and 10, higher -> more overfitting)
+                          'min_data_in_leaf': MIN_DATA_LEAF,
+                          'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
+                          'rsm': 0.5,  # % of features to consider in each split (lower -> faster and reduces overfitting)
+                          'subsample': 0.5,  # Sample rate for bagging
+                          'random_seed': RANDOM_SEED
+                          }
+        other_parameters = {'number_of_folds': NUMBER_OF_FOLDS, 'random_seed': RANDOM_SEED}
+        number_of_iterations = round(method.model_catboost.best_iteration_ / (1 - TEST_TRAIN_RATIO) * (1 - 1 / NUMBER_OF_FOLDS))
+        iterations = [round(number_of_iterations * f) for f in ITERATIONS_MULTIPLIER_LIST]
         scores: List[float] = list()
+        # Process data
+        logger.info("Processing data")
+        train_df = remove_missing_values(train_df, THRESHOLD_MISSING)
+        train_df, test_df = fill_missing_categorical((train_df, test_df), 'NA')
+        logger.info(f"Processing Correlation")
+        correlated_columns = method.analyse_correlation(train_df, THRESHOLD_CORRELATION)
+        if correlated_columns is not None and len(correlated_columns) > 0:
+            train_df = train_df.drop(columns=correlated_columns)
+            test_df = test_df.drop(columns=correlated_columns)
+        logger.info(f"Processing Constant columns")
+        constant_columns = method.analyse_constant(train_df)
+        if constant_columns is not None and len(constant_columns) > 0:
+            train_df = train_df.drop(columns=constant_columns)
+            test_df = test_df.drop(columns=constant_columns)
+        x_train = train_df.drop(columns=['ID', 'TARGET']).reset_index(drop=True)
+        y_train = train_df['TARGET'].reset_index(drop=True)
+        x_test = test_df.reset_index(drop=True)
         for i in iterations:
             logger.info(f'Iteration {i}')
-            method = CatboostKFold(logger, model_params={'eval_metric': 'AUC',
-                                                         'od_type': 'Iter',
-                                                         'random_seed': 4567,
-                                                         'n_estimators': i,
-                                                         'verbose': False,}, random_seed=4567)
-            Pred_train, Pred_test, score = method.train_predict(number_of_folds=NUMBER_OF_FOLDS,
-                                                                random_seed=2305,
-                                                                make_prediction=True, x=x_train, y=y_train,
+            method = CatboostCrossValidation(logger, model_params={**model_parameters,
+                                                                   'n_estimators': i
+                                                                   })
+
+            Pred_train, Pred_test, score = method.train_predict(x=x_train, y=y_train,
                                                                 x_test=x_test.drop(columns=['ID']).reset_index(drop=True),
-                                                                run_params={'objective': 'Logloss',
-                                                                   'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
-                                                                   'depth': 6,  # Depth of the trees (values betwwen 5 and 10, higher -> more overfitting)
-                                                                   'min_data_in_leaf': 150,
-                                                                   'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
-                                                                   'rsm': 0.5, # % of features to consider in each split (lower -> faster and reduces overfitting)
-                                                                   'subsample': 0.5,  # Sample rate for bagging
-                                                                   'random_seed': 4567
-                                                                })
+                                                                run_params=run_parameters, other_params= other_parameters)
             # Look if we are in the first test:
             if len(scores) == 0:
                 max_score = float('-inf')
@@ -318,25 +299,232 @@ if __name__ == "__main__":
 
         # Adjust optimal CV number of rounds to whole sample size:
         i = int(iterations[scores.index(max(scores))] / (1 - 1 / NUMBER_OF_FOLDS))
-
-        # Define the optimal model
-        method = Catboost(logger, model_params={'n_estimators': i,
-                                                'random_seed': 4567,
-                                                'verbose': 100})
-        x_train = train_df.drop(columns=['ID', 'TARGET']+remove).reset_index(drop=True)
+        # Basic CatBoost run to determine the number of iterations that was used to learn
+        # Constant definition for the basic CatBoost
+        THRESHOLD_MISSING: int = 20
+        THRESHOLD_CORRELATION: float = 0.99
+        TEST_TRAIN_RATIO: float = 0.3
+        RANDOM_SEED: int = 1234
+        EARLY_STOPPING_ROUNDS: int = 10000
+        # Parameters of the CatBoost model
+        model_parameters = {'eval_metric': 'AUC',
+                            'n_estimators': i,
+                            'od_type': 'Iter',
+                            'random_seed': RANDOM_SEED,
+                            'verbose': 50
+                            }
+        run_parameters = {'objective': 'Logloss',
+                          'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
+                          'depth': DEPTH,  # Depth of the trees (values between 5 and 10, higher -> more overfitting)
+                          'min_data_in_leaf': MIN_DATA_LEAF,
+                          'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
+                          'rsm': 0.5,  # % of features to consider in each split (lower -> faster and reduces overfitting)
+                          'subsample': 0.5,  # Sample rate for bagging
+                          'random_seed': RANDOM_SEED
+                          }
+        other_parameters = {'early_stopping_rounds': EARLY_STOPPING_ROUNDS,
+                            'random_seed': RANDOM_SEED,
+                            'test_train_ratio': 0.0
+                           }
+        # Pre process data
+        train_df = remove_missing_values(train_df, THRESHOLD_MISSING)
+        train_df, test_df = fill_missing_categorical((train_df, test_df), 'NA')
+        # CatBoost Basic
+        method = CatboostBasic(logger, model_params=model_parameters)
+        # Process data
+        logger.info("Processing data")
+        logger.info(f"Processing Correlation")
+        correlated_columns = method.analyse_correlation(train_df, THRESHOLD_CORRELATION)
+        if correlated_columns is not None and len(correlated_columns) > 0:
+            train_df = train_df.drop(columns=correlated_columns)
+            test_df = test_df.drop(columns=correlated_columns)
+        logger.info(f"Processing Constant columns")
+        constant_columns = method.analyse_constant(train_df)
+        if constant_columns is not None and len(constant_columns) > 0:
+            train_df = train_df.drop(columns=constant_columns)
+            test_df = test_df.drop(columns=constant_columns)
+        x_train = train_df.drop(columns=['ID', 'TARGET']).reset_index(drop=True)
         y_train = train_df['TARGET'].reset_index(drop=True)
-        x_test = test_df.drop(columns=remove).reset_index(drop=True)
-        method.train(x_train, y_train, run_params={'objective': 'Logloss',
-                                                   'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
-                                                   'depth': 4,  # Depth of the trees (values betwwen 5 and 10, higher -> more overfitting)
-                                                   'min_data_in_leaf': 150,
-                                                   'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
-                                                   'rsm': 0.5, # % of features to consider in each split (lower -> faster and reduces overfitting)
-                                                   'subsample': 0.5,  # Sample rate for bagging
-                                                   'random_seed': 4567
-                                                   })
-        result = method.predict(train_df.drop(columns=['TARGET']+remove).reset_index(drop=True))
+        x_test = test_df.reset_index(drop=True)
+        # Train and predict
+        method.train(x_train, y_train, run_params=run_parameters, other_params=other_parameters)
+
+        result = method.predict(train_df.drop(columns=['TARGET']).reset_index(drop=True), 'ID', 'Pred')
         cm = confusion_matrix(y_train, result['Pred'] > 0.5)
         print(cm)
-        result = method.predict(x_test)
+        result = method.predict(x_test, 'ID', 'Pred')
+
+    elif args.method == 'prof':
+        ################################################################################
+        ################################# FEATURE ######################################
+        ############################### ENGINEERING ####################################
+        ################################################################################
+        # Feature types
+        train = train_df.copy()
+        test = test_df.copy()
+        Features = train.dtypes.reset_index()
+        Categorical = Features.loc[Features[0] == 'object', 'index']
+
+        # Categorical to the begining
+        cols = train.columns.tolist()
+        pos = 0
+        for col in Categorical:
+            cols.insert(pos, cols.pop(cols.index(col)))
+            pos += 1
+        train = train[cols]
+        cols.remove('TARGET')
+        test = test[cols]
+
+
+        # 1) Missings
+        ################################################################################
+        # Function to print columns with at least n_miss missings
+        def miss(ds, n_miss):
+            miss_list = list()
+            for col in list(ds):
+                if ds[col].isna().sum() >= n_miss:
+                    print(col, ds[col].isna().sum())
+                    miss_list.append(col)
+            return miss_list
+
+
+        # Which columns have 1 missing at least...
+        print('\n################## TRAIN ##################')
+        m_tr = miss(train, 1)
+        print('\n################## TEST ##################')
+        m_te = miss(test, 1)
+
+        # Missings in categorical features (fix it with an 'NA' string)
+        ################################################################################
+        train, test = fill_missing_categorical((train, test), 'NA')
+        # for col in Categorical:
+        #     train.loc[train[col].isna(), col] = 'NA'
+        #     test.loc[test[col].isna(), col] = 'NA'
+
+        # Missings -> Drop some rows
+        ################################################################################
+        # We can see a lot of colummns with 3 missings in train, look the data and...
+        # there are 4 observations that have many columns with missing values:
+        # A1039
+        # A2983
+        # A3055
+        # A4665
+        train = remove_missing_values(train, 20)
+
+        train.reset_index(drop=True, inplace=True)
+
+        # 2) Correlations
+        ################################################################################
+        # Let's see if certain columns are correlated
+        # or even that are the same with a "shift"
+        thresholdCorrelation = 0.99
+
+
+        def InspectCorrelated(df):
+            corrMatrix = df.corr().abs()  # Correlation Matrix
+            upperMatrix = corrMatrix.where(np.triu(np.ones(corrMatrix.shape), k=1).astype(bool))
+            correlColumns = []
+            for col in upperMatrix.columns:
+                correls = upperMatrix.loc[upperMatrix[col] > thresholdCorrelation, col].keys()
+                if len(correls) >= 1:
+                    correlColumns.append(col)
+                    print("\n", col, '->', end=" ")
+                    for i in correls:
+                        print(i, end=" ")
+            print('\nSelected columns to drop:\n', correlColumns)
+            return correlColumns
+
+
+        # Look at correlations in the original features
+        correlColumns = InspectCorrelated(train.iloc[:, len(Categorical):-1])
+
+        # If we are ok, throw them:
+        train = train.drop(correlColumns, axis=1)
+        test = test.drop(correlColumns, axis=1)
+
+
+        # 3) Constants
+        ################################################################################
+        # Let's see if there is some constant column:
+        def InspectConstant(df):
+            consColumns = []
+            for col in list(df):
+                if len(df[col].unique()) < 2:
+                    print(df[col].dtypes, '\t', col, len(df[col].unique()))
+                    consColumns.append(col)
+            print('\nSelected columns to drop:\n', consColumns)
+            return consColumns
+
+
+        consColumns = InspectConstant(train.iloc[:, len(Categorical):-1])
+
+        # If we are ok, throw them:
+        train = train.drop(consColumns, axis=1)
+        test = test.drop(consColumns, axis=1)
+
+        train['TARGET'].mean()
+
+        ################################################################################
+        ################################ MODEL CATBOOST ################################
+        ################################# TRAIN / TEST #################################
+        ################################################################################
+        pred = list(train)[1:-1]
+        X_train = train[pred].reset_index(drop=True)
+        Y_train = train['TARGET'].reset_index(drop=True)
+        X_test = test[pred].reset_index(drop=True)
+
+        # 1) For expensive models (catboost) we first try with validation set (no cv)
+        ################################################################################
+        from catboost import CatBoostClassifier
+        from catboost import Pool
+
+        # train / test partition
+        RS = 1234  # Seed for partitions (train/test) and model random part
+        TS = 0.3  # Validation size
+        esr = 100  # Early stopping rounds (when validation does not improve in these rounds, stops)
+
+        from sklearn.model_selection import train_test_split
+
+        x_tr, x_val, y_tr, y_val = train_test_split(X_train, Y_train, test_size=TS, random_state=RS)
+
+        # Categorical positions for catboost
+        Pos = list()
+        As_Categorical = Categorical.tolist()
+        print(As_Categorical)
+        As_Categorical.remove('ID')
+        for col in As_Categorical:
+            Pos.append((X_train.columns.get_loc(col)))
+
+        # To Pool Class (for catboost only)
+        pool_tr = Pool(x_tr, y_tr, cat_features=Pos)
+        pool_val = Pool(x_val, y_val, cat_features=Pos)
+
+        # By-hand parameter tuning. A grid-search is expensive
+        # We test different combinations
+        # See parameter options here:
+        # "https://catboost.ai/en/docs/references/training-parameters/"
+        model_catboost_val = CatBoostClassifier(
+            eval_metric='AUC',
+            iterations=5000,  # Very high value, to find the optimum
+            od_type='Iter',  # Overfitting detector set to "iterations" or number of trees
+            random_seed=RS,  # Random seed for reproducibility
+            verbose=50)  # Shows train/test metric every "verbose" trees
+
+        # "Technical" parameters of the model:
+        params = {'objective': 'Logloss',
+                  'learning_rate': 0.01,  # learning rate, lower -> slower but better prediction
+                  'depth': 4,  # Depth of the trees (values betwwen 5 and 10, higher -> more overfitting)
+                  'min_data_in_leaf': 150,
+                  'l2_leaf_reg': 20,  # L2 regularization (between 3 and 20, higher -> less overfitting)
+                  'rsm': 0.5,  # % of features to consider in each split (lower -> faster and reduces overfitting)
+                  'subsample': 0.5,  # Sample rate for bagging
+                  'random_seed': RS}
+
+        model_catboost_val.set_params(**params)
+
+        print('\nCatboost Fit (Validation)...\n')
+        model_catboost_val.fit(X=pool_tr,
+                               eval_set=pool_val,
+                               early_stopping_rounds=esr)
+
     result.to_csv(args.result_file, index=False)
